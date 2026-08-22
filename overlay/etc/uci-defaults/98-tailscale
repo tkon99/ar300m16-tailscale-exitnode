@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enable the tailscale service on first boot.
+/etc/init.d/tailscale enable
+exit 0
