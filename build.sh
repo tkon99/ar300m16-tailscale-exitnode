@@ -36,7 +36,13 @@ mkdir -p "$WORKDIR" "$OUTDIR"
 # dns, netstack, useexitnode, useroutes, portmapper, gro, health.
 # NOTE: upstream's own "build_dist.sh --extra-small" omits advertiseexitnode
 # and iptables — do NOT use it blindly for an exit node.
-TS_REMOVE_FEATURES="ssh,webclient,serve,drive,taildrop,appconnectors,relayserver,flashappliance,cloud,aws,kube,bird,synology,networkmanager,resolved,systray,desktop_sessions,dbus,sdnotify,syspolicy,tpm,wakeonlan,qrcodes,colorable,completion,completion_scripts,doctor,acme,bakedroots,captiveportal,clientupdate,identityfederation,outboundproxy,tap,posture,portlist,netlog,capture,webbrowser,hujsonconf,unixsocketidentity,serviceclientprefs,runtimemetrics,usermetrics,debugeventbus,debug,debugportmapper,cliconndiag,remoteconfig,conn25,useproxy"
+# unixsocketidentity must NOT be omitted either: with ts_omit_unixsocketidentity
+# (verified on v1.102.3) ipn/ipnauth/ipnauth_unix_creds.go is compiled out,
+# connections are never classified as unix sockets, and tailscaled's localapi
+# denies EVERY client — all `tailscale ...` commands fail with
+# "Access denied: status access denied", despite the feature description
+# claiming "if omitted, all users have full access".
+TS_REMOVE_FEATURES="ssh,webclient,serve,drive,taildrop,appconnectors,relayserver,flashappliance,cloud,aws,kube,bird,synology,networkmanager,resolved,systray,desktop_sessions,dbus,sdnotify,syspolicy,tpm,wakeonlan,qrcodes,colorable,completion,completion_scripts,doctor,acme,bakedroots,captiveportal,clientupdate,identityfederation,outboundproxy,tap,posture,portlist,netlog,capture,webbrowser,hujsonconf,serviceclientprefs,runtimemetrics,usermetrics,debugeventbus,debug,debugportmapper,cliconndiag,remoteconfig,conn25,useproxy"
 
 log() { printf '\n==> %s\n' "$*"; }
 
@@ -151,8 +157,14 @@ chmod 755 "$FILES/etc/uci-defaults/97-rootpw"
 # ------------------------------------------------------------ 6. Build image
 log "Building image (this also validates all package downloads)..."
 # kmod-tun is REQUIRED (tailscaled needs /dev/net/tun); iptables-nft lets
-# tailscaled program its NAT/masquerade rules under fw4/nftables.
-PACKAGES="luci iptables-nft ip6tables-nft kmod-tun"
+# tailscaled program its rules under fw4/nftables — but the userspace compat
+# layer alone is NOT enough: without kmod-ipt-nat, kmod-ipt-conntrack,
+# kmod-ipt-conntrack-extra and the iptables-mod-conntrack-extra/-ipopt plugin
+# packages, tailscaled's ts-postrouting MASQUERADE and connmark rules fail
+# ("Chain 'MASQUERADE' does not exist" / "Couldn't load match `connmark'")
+# and the exit node joins the tailnet but can never NAT client traffic out.
+# Verified live on 22.03.4 / Tailscale v1.102.3.
+PACKAGES="luci iptables-nft ip6tables-nft kmod-tun kmod-ipt-nat kmod-ipt-conntrack kmod-ipt-conntrack-extra iptables-mod-conntrack-extra iptables-mod-ipopt"
 make -C "$IB_DIR" image PROFILE="$PROFILE" PACKAGES="$PACKAGES" FILES="$FILES"
 
 # --------------------------------------------------------------- 7. Collect

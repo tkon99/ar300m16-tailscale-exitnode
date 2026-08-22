@@ -25,8 +25,11 @@ comfortably inside the ~15.8 MB firmware partition.
   combined `tailscale`/`tailscaled` binary, MIPS32 soft-float, statically linked
 - `tailscaled` running at boot via procd; exit-node advertisement is one
   command after first login
-- iptables-nft compatibility layer (Tailscale programs its exit-node
-  NAT/masquerade rules through it under fw4/nftables)
+- iptables-nft compatibility layer **plus the kernel modules and userspace
+  plugins it actually needs** (kmod-ipt-nat/conntrack/conntrack-extra,
+  iptables-mod-conntrack-extra/-ipopt) — without these, Tailscale's
+  exit-node MASQUERADE and connmark rules fail silently and client traffic
+  never gets NATed out (verified the hard way)
 - kmod-tun included
 - Root password of your choice (or auto-generated random) baked in as a hash
 
@@ -99,11 +102,45 @@ Upstream's own `build_dist.sh --extra-small` currently selects tags that
 join your tailnet but cannot act as an exit node. This repo passes its own
 `--remove` list to `cmd/featuretags`, keeping all exit-node-critical features
 (`advertiseexitnode`, `osrouter`, `iptables`, `dns`, `netstack`,
-`useexitnode`, `useroutes`, `portmapper`, ...) while dropping ~53 irrelevant
+`useexitnode`, `useroutes`, `portmapper`, ...) while dropping ~50 irrelevant
 ones (SSH server, web client, Serve/Funnel, Taildrop, Drive, cloud/K8s
 integrations, desktop bits...). If a future Tailscale renames features and tag
 selection fails, the script falls back to a full (larger, still fitting)
 build rather than a broken one.
+
+A second trap, found the hard way on v1.102.3: **do not omit the
+`unixsocketidentity` feature** either. Despite its description ("if omitted,
+all users have full access"), building with `ts_omit_unixsocketidentity`
+compiles out `ipn/ipnauth/ipnauth_unix_creds.go`, so connections to
+tailscaled are never classified as unix sockets — and the local API then
+denies *every* client. Every `tailscale ...` command dies with
+`Access denied: status access denied`. Regular SSH-over-the-tailnet still
+works (that's plain dropbear), but the CLI is useless until you reflash with
+a correctly-built binary.
+
+## Field notes (learned on a live device)
+
+- **`opkg update` can fail silently right after first boot** (network/DNS not
+  fully up), after which every `opkg install` claims "Unknown package". Run
+  `opkg update` again and check `/var/opkg-lists/` is populated before
+  concluding a package doesn't exist.
+- **SSH over Tailscale needs no firewall changes** — dropbear listens on all
+  interfaces and unzoned interfaces (like `tailscale0`) fall under the global
+  input-ACCEPT default. `ssh root@<100.x.y.z>` just works once the node is on
+  your tailnet. If you *also* want SSH reachable from the router's WAN side
+  (e.g. it sits on your home LAN), add it explicitly — but prefer tailnet
+  access and skip this:
+
+  ```sh
+  uci add firewall rule; uci set firewall.@rule[-1].name='Allow-SSH-WAN'
+  uci set firewall.@rule[-1].src='wan'; uci set firewall.@rule[-1].proto='tcp'
+  uci set firewall.@rule[-1].dest_port='22'; uci set firewall.@rule[-1].target='ACCEPT'
+  uci commit firewall && /etc/init.d/firewall restart
+  ```
+
+- On this CPU tailscaled takes ~60–90 s to create its socket after boot;
+  `tailscale: ... no such file or directory` right after login just means
+  "wait a minute and retry".
 
 ## Rollback
 
