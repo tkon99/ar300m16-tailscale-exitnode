@@ -142,6 +142,22 @@ a correctly-built binary.
   `tailscale: ... no such file or directory` right after login just means
   "wait a minute and retry".
 
+## The fw4 zone trap (why an exit node can join but not forward)
+
+OpenWrt 22.03+ uses the nftables-based fw4 firewall. tailscaled programs its
+accept/NAT rules through iptables-nft, which lands them in the *legacy*
+`ip filter` / `ip nat` tables — while fw4 evaluates traffic in its own
+`inet fw4` table. Netfilter runs **both** tables at the same hook, and an
+ACCEPT in one does not cancel a REJECT in the other. Result: exit-node
+traffic passes tailscaled's `ts-forward` chain (counters climb!) and is then
+silently rejected by fw4 — clients see DNS resolve but every connection
+times out (`ERR_ADDRESS_UNREACHABLE`, spins forever). The image therefore
+ships a first-boot uci-defaults script that creates a `tailscale` zone for
+`tailscale0` (input/output/forward ACCEPT) plus a `tailscale → wan`
+forwarding rule; fw4's WAN masquerade then also handles NAT. If you build
+your own image or set this up on an existing install, this zone/forwarding
+pair is **required** for exit-node (and any subnet-routing) duty.
+
 ## Rollback
 
 GL.iNet stock firmware can always be restored via the U-Boot web page

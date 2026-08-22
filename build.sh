@@ -137,6 +137,26 @@ install -m 755 "$WORKDIR/tailscaled" "$FILES/usr/sbin/tailscaled"
 ln -s /usr/sbin/tailscaled "$FILES/usr/bin/tailscale"
 # enable the service on first boot
 install -m 755 overlay/etc/uci-defaults/98-tailscale "$FILES/etc/uci-defaults/"
+# fw4 (nftables) doesn't know about tailscale0: Tailscale's own filter rules
+# land in the legacy iptables-nft table, but an ACCEPT there does NOT override
+# fw4's forward-chain REJECT in its own table — exit-node traffic reaches the
+# router, gets marked/accepted by ts-forward, and then silently dies. A zone
+# for tailscale0 with forwarding to wan fixes it (fw4's wan masquerade then
+# also handles NAT). Verified live: without this, `curl http://1.1.1.1`
+# through the exit node times out; with it, HTTP 200.
+cat > "$FILES/etc/uci-defaults/96-firewall-tailscale" <<'EOF'
+uci add firewall zone >/dev/null
+uci set firewall.@zone[-1].name='tailscale'
+uci set firewall.@zone[-1].input='ACCEPT'
+uci set firewall.@zone[-1].output='ACCEPT'
+uci set firewall.@zone[-1].forward='ACCEPT'
+uci add_list firewall.@zone[-1].device='tailscale0'
+uci add firewall forwarding >/dev/null
+uci set firewall.@forwarding[-1].src='tailscale'
+uci set firewall.@forwarding[-1].dest='wan'
+uci commit firewall
+EOF
+chmod 755 "$FILES/etc/uci-defaults/96-firewall-tailscale"
 # LAN address (generated here so LAN_IP stays configurable)
 cat > "$FILES/etc/uci-defaults/99-lan-ip" <<EOF
 uci set network.lan.ipaddr='${LAN_IP}'
